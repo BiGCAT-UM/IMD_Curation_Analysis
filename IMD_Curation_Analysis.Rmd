@@ -1,0 +1,569 @@
+---
+title: "IMD Curation analysis"
+author: 
+- "DeniseSl22"
+date: "20/04/2023"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+## 0. Setup
+```{r}
+#Package manager:
+if(!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager",repos = "http://cran.us.r-project.org")
+#Package for path variable
+if(!"rstudioapi" %in% installed.packages()) BiocManager::install("rstudioapi")
+#Libraries required for markdown documents:
+if(!"markdown" %in% installed.packages()){install.packages("markdown")}
+if(!"rmarkdown" %in% installed.packages()){install.packages("rmarkdown")}
+if(!"dplyr" %in% installed.packages()){install.packages("dplyr")}
+
+#load libraries
+library(rstudioapi)
+library(dplyr)
+
+# set working environment to current folder
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+##Add SPARQL package
+if(!"SPARQL" %in% installed.packages()){
+  install.packages("SPARQL")
+}
+library(SPARQL)
+
+##Connect to Endpoint WikiPathways
+endpointwp <- "https://sparql.wikipathways.org/sparql"
+
+##Install and load required packages for calling an API:
+api_packages <- c("httr", "jsonlite", "data.table")
+for (i in 1:length(api_packages)) {
+if(!api_packages[i] %in% installed.packages()){install.packages(api_packages[i])}
+}
+#install.packages(c("httr", "jsonlite", "data.table"))
+library(httr)
+library(jsonlite)
+library(data.table)
+
+if(!"VennDiagram" %in% installed.packages()){install.packages("VennDiagram")}
+if(!"RColorBrewer" %in% installed.packages()){install.packages("RColorBrewer")}
+if(!"ggplot2" %in% installed.packages()){install.packages("ggplot2")}
+# Load libraries
+library(VennDiagram)
+library(RColorBrewer)
+library(ggplot2)
+```
+
+## 1A. Obtain WPID, name, #genes/proteins, #metabolites, #diseases:
+
+```{r}
+## Retrieve all IMD relationships, based on protein list (HGNC) obtained from a pathway model.
+queryWikiPathways_IMD_content <-
+"
+#Prefixes required which might not be available in the SPARQL endpoint by default
+PREFIX wp:      <http://vocabularies.wikipathways.org/wp#>
+PREFIX rdfs:    <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX dcterms: <http://purl.org/dc/terms/>
+
+#Variable selection
+SELECT DISTINCT (str(?title) as ?pathwayName) ?PWID 
+(count(distinct ?geneProduct) AS ?GenesInPWs)
+(count(distinct ?protein) AS ?ProteinsInPWs) 
+(count(distinct ?metaboliteNode) AS ?MetabolitesInPWs) 
+(count(distinct ?interactionID) AS ?RheaInPWs) 
+(count(distinct ?interactionMissing) AS ?NoRheaInPWs)
+(count(distinct ?omim) as ?diseaseIDs)
+
+WHERE {
+
+    ?pathway dcterms:identifier ?PWID. #Obtain the ID
+    ?pathway wp:ontologyTag cur:IEM .  #Only IMD pathways
+    ?pathway wp:isAbout ?gpmlRDF_ID .  #find the corresponding GPML link     
+    ?pathway dc:title ?title . #Obtain the title   
+
+      {
+    ?geneProduct dcterms:isPartOf ?pathway . #Only those part of PW             
+    ?geneProduct a wp:GeneProduct . #Filter for Protein DataNodes    
+    } 
+    UNION
+    {
+    ?protein dcterms:isPartOf ?pathway . #Only those part of PW             
+    ?protein a wp:Protein . #Filter for Protein DataNodes    
+    } 
+    UNION
+    { 
+    ?metaboliteNode a wp:Metabolite . #Filter for Metabolite DataNodes
+    ?metaboliteNode dcterms:isPartOf ?pathway . #Only those part of PW
+    }
+    UNION 
+    { 
+    OPTIONAL{?interaction wp:bdbRhea ?interactionID . #Find interactions with Rhea
+    ?interaction dcterms:isPartOf ?pathway .} #Only those part of PW
+    }
+    UNION
+    {
+    OPTIONAL{?interactionMissing dcterms:isPartOf ?pathway . #Additional interactions
+    ?interactionMissing rdf:type wp:Conversion . #Type 'metabolic conversion'
+    FILTER NOT EXISTS {?interactionMissing wp:bdbRhea ?interactionID . }#No Rhea   
+    }  
+    }
+    UNION {
+    ?diseaseNode dcterms:isPartOf ?gpmlRDF_ID . #Only check for matching pathways 
+    ?diseaseNode rdf:type gpml:Label . #Only include textLabels
+    ?diseaseNode gpml:href ?omim . #That have an href attribute  
+    FILTER regex(?omim, \"omim.org\", \"i\") #Only keep hrefs if they contain 'omim.org'
+    }
+      
+} ORDER BY ASC(?pathway)
+"
+
+##Execute query:
+resultsWikiPathways_IMD_content <- SPARQL(endpointwp,queryWikiPathways_IMD_content,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_IMD_content <- resultsWikiPathways_IMD_content$results
+remove(queryWikiPathways_IMD_content, resultsWikiPathways_IMD_content)
+
+##Print out results to Notebook:
+showresultsWikiPathways_IMD_content
+
+```
+
+## 1B. Obtain Total count for #genes/proteins, #metabolites, #diseases in IMD pathway models:
+
+```{r}
+## Retrieve all IMD relationships, based on protein list (HGNC) obtained from a pathway model.
+queryWikiPathways_IMD_content_total <-
+"
+SELECT DISTINCT
+#Variable selection
+(count(distinct ?PWID) AS ?Pathways)
+(count(distinct ?geneProduct) AS ?GenesInPWs)
+(count(distinct ?protein) AS ?ProteinsInPWs) 
+(count(distinct ?metaboliteNode) AS ?MetabolitesInPWs) 
+(count(distinct ?interactionID) AS ?RheaInPWs) 
+(count(distinct ?interactionMissing) AS ?NoRheaInPWs)
+(count(distinct ?omim) as ?diseaseIDs)
+
+WHERE {
+
+    ?pathway dcterms:identifier ?PWID. #Obtain the ID
+    ?pathway wp:ontologyTag cur:IEM .  #Only IMD pathways
+    ?pathway wp:isAbout ?gpmlRDF_ID .  #find the corresponding GPML link     
+    ?pathway dc:title ?title . #Obtain the title   
+
+      {
+    ?geneProduct dcterms:isPartOf ?pathway . #Only those part of PW             
+    ?geneProduct a wp:GeneProduct . #Filter for Protein DataNodes    
+    } 
+    UNION
+    {
+    ?protein dcterms:isPartOf ?pathway . #Only those part of PW             
+    ?protein a wp:Protein . #Filter for Protein DataNodes    
+    } 
+    UNION
+    { 
+    ?metaboliteNode a wp:Metabolite . #Filter for Metabolite DataNodes
+    ?metaboliteNode dcterms:isPartOf ?pathway . #Only those part of PW
+    }
+    UNION 
+    { 
+    OPTIONAL{?interaction wp:bdbRhea ?interactionID . #Find interactions with Rhea
+    ?interaction dcterms:isPartOf ?pathway .} #Only those part of PW
+    }
+    UNION
+    {
+    OPTIONAL{?interactionMissing dcterms:isPartOf ?pathway . #Additional interactions
+    ?interactionMissing rdf:type wp:Conversion . #Type 'metabolic conversion'
+    FILTER NOT EXISTS {?interactionMissing wp:bdbRhea ?interactionID . }#No Rhea   
+    }  
+    }
+    UNION {
+    ?diseaseNode dcterms:isPartOf ?gpmlRDF_ID . #Only check for matching pathways 
+    ?diseaseNode rdf:type gpml:Label . #Only include textLabels
+    ?diseaseNode gpml:href ?omim . #That have an href attribute  
+    FILTER regex(?omim, \"omim.org\", \"i\") #Only keep hrefs if they contain 'omim.org'
+    }
+}
+"
+
+##Execute query:
+resultsWikiPathways_IMD_content_total <- SPARQL(endpointwp,queryWikiPathways_IMD_content_total,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_IMD_content_total <- resultsWikiPathways_IMD_content_total$results
+remove(queryWikiPathways_IMD_content_total, resultsWikiPathways_IMD_content_total)
+
+##Print out results to Notebook:
+showresultsWikiPathways_IMD_content_total
+
+```
+
+## 2. Obtain Identifiers used in these pathway models:
+
+```{r}
+## Retrieve the different identifiers used in IMD pathway models.
+queryWikiPathways_IMD_ids <-
+"
+SELECT DISTINCT (str(?datasourceLit) as ?datasource) 
+(count(distinct ?identifier) AS ?numberEntries) 
+?dataNodeType
+##Uncomment line below for curation:
+#(GROUP_CONCAT(DISTINCT ?PWID ;separator=\", \") AS ?results)
+WHERE {
+  ?pathway dcterms:identifier ?PWID. #Obtain the ID
+  ?pathway wp:ontologyTag cur:IEM .  #Only IMD pathways
+  ?pathway wp:isAbout ?gpmlRDF_ID .  #find the corresponding GPML link  
+  ?concept dcterms:isPartOf ?gpmlRDF_ID .  #Only those part of PW  
+  
+  ?concept gpml:xrefDataSource ?datasourceLit . #Database used for Annotation
+  ?concept gpml:xrefId ?identifier . #Identifier used for Annotation
+  ?concept gpml:type ?dataNodeType . #Type of DataNode
+  
+} ORDER BY DESC(?dataNodeType) DESC(?numberEntries)
+"
+
+##Execute query:
+resultsWikiPathways_IMD_ids <- SPARQL(endpointwp,queryWikiPathways_IMD_ids,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_IMD_ids <- resultsWikiPathways_IMD_ids$results
+remove(queryWikiPathways_IMD_ids, resultsWikiPathways_IMD_ids)
+
+##Print out results to Notebook:
+showresultsWikiPathways_IMD_ids
+
+```
+
+## 3A. Download Metabolite IDs from Pathway Models:
+```{r}
+##Query WikiPathways Metabolite IDs for IMD Pathways, through KEGG Compound IDs:
+queryWikiPathways_IMDs <-
+"SELECT DISTINCT 
+(GROUP_CONCAT(DISTINCT ?PWID1 ;separator=\", \") AS ?results)
+(fn:substring(?WD_ID1, 39) as ?WikidataID)
+(count(distinct ?PWID1) AS ?CountID) 
+
+WHERE {  
+  ##Find all DataNodes in an IMD PW
+  ?pathway1 a wp:Pathway .  #Define pathways
+  ?pathway1 dcterms:identifier ?PWID1. #Obtain the ID
+  ?pathway1 wp:ontologyTag cur:IEM . #Only IMD pathways  
+  ?datanode1 dcterms:isPartOf ?pathway1 . #Query all datanodes in PW
+  ?datanode1 wp:bdbKeggCompound ?WD_ID1 .  #Unify to Kegg Compound
+  ?datanode1 a wp:Metabolite . #Only use Metabolite DataNodes
+
+  ##Compare results from two queries to find overlap
+  FILTER(?PWID1 != ?PWID2) .
+  FILTER(?WD_ID1 = ?WD_ID2) .
+
+}ORDER BY DESC(?CountID)
+"
+##Execute query:
+resultsWikiPathways_IMDs <- SPARQL(endpointwp,queryWikiPathways_IMDs,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_IMDs <- resultsWikiPathways_IMDs$results
+remove(queryWikiPathways_IMDs, resultsWikiPathways_IMDs)
+
+##Query WikiPathways Metabolite IDs for not IMD Pathways, through KEGG Compound IDs:
+queryWikiPathways_nonIMDs <-
+"SELECT DISTINCT 
+(GROUP_CONCAT(DISTINCT ?PWID2 ;separator=\", \") AS ?results)
+(fn:substring(?WD_ID2, 39) as ?WikidataID)
+(count(distinct ?PWID2) AS ?CountID) 
+
+WHERE {  
+  ##Find equal DataNodes in another PW
+  ?pathway2 a wp:Pathway .  #Define pathways
+  ?pathway2 dcterms:identifier ?PWID2. #Obtain the ID  
+  ?pathway2 wp:organismName \"Homo sapiens\" . #Filter for Human pathways
+  FILTER (EXISTS {?pathway2 wp:ontologyTag cur:AnalysisCollection}) . #Filter for Analysis collection only
+  FILTER (NOT EXISTS {?pathway2 wp:ontologyTag cur:IEM}) . ##Remove PWs from IMD collection
+  ?datanode2 dcterms:isPartOf ?pathway2 . #Query all datanodes in PW
+  ?datanode2 wp:bdbKeggCompound  ?WD_ID2 . #Unify to Kegg Compound
+  ?datanode2 a wp:Metabolite . #Only use Metabolite DataNodes
+
+}ORDER BY DESC(?CountID)
+"
+##Execute query:
+resultsWikiPathways_nonIMDs <- SPARQL(endpointwp,queryWikiPathways_nonIMDs,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_nonIMDs <- resultsWikiPathways_nonIMDs$results
+remove(queryWikiPathways_nonIMDs, resultsWikiPathways_nonIMDs)
+
+
+##Query Reactome Metabolite IDs for not IMD Pathways, through Kegg Compound IDs:
+queryReactome_nonIMDs <-
+"SELECT DISTINCT 
+(GROUP_CONCAT(DISTINCT ?PWID2 ;separator=\", \") AS ?results)
+(fn:substring(?WD_ID2, 39) as ?WikidataID)
+(count(distinct ?PWID2) AS ?CountID) 
+
+WHERE {  
+  ##Find equal DataNodes in another PW
+  ?pathway2 a wp:Pathway .  #Define pathways
+  ?pathway2 dcterms:identifier ?PWID2. #Obtain the ID  
+  ?pathway2 wp:organismName \"Homo sapiens\" . #Filter for Human pathways
+  FILTER (EXISTS {?pathway2 wp:ontologyTag cur:Reactome_Approved}) . #Filter for Reactome collection only
+  FILTER (NOT EXISTS {?pathway2 wp:ontologyTag cur:IEM}) . ##Remove PWs from IMD collection
+  ?datanode2 dcterms:isPartOf ?pathway2 . #Query all datanodes in PW
+  ?datanode2 wp:bdbKeggCompound  ?WD_ID2 . #Unify to Kegg Compound
+  ?datanode2 a wp:Metabolite . #Only use Metabolite DataNodes
+
+}ORDER BY DESC(?CountID)
+"
+##Execute query:
+resultsReactome_nonIMDs <- SPARQL(endpointwp,queryReactome_nonIMDs,curl_args=list(useragent=R.version.string))
+showresultsReactome_nonIMDs <- resultsReactome_nonIMDs$results
+remove(queryReactome_nonIMDs, resultsReactome_nonIMDs)
+
+
+##Query KEGG metabolites through their API for human pathways
+
+#Find all human pathway IDs:
+human_kegg_pathway_APIcall <- "https://rest.kegg.jp/list/pathway/hsa"
+human_kegg_pathway_APIdata <- GET(human_kegg_pathway_APIcall)
+human_kegg_pathway_data <- rawToChar(human_kegg_pathway_APIdata$content)
+if(length(human_kegg_pathway_APIdata$content)>1){
+  cleaned_human_kegg_pathway_data <- fread(text = human_kegg_pathway_data , header=FALSE)
+}
+remove(human_kegg_pathway_data, human_kegg_pathway_APIdata, human_kegg_pathway_APIcall)
+
+##Convert 'hsa:' prefix to 'map'
+cleaned_human_kegg_pathway_data$V1 <-gsub("hsa","map",as.character(cleaned_human_kegg_pathway_data$V1))
+
+#Convert pathway map IDs to an array to add to API call
+list_human_kegg_pathway_data <- c(cleaned_human_kegg_pathway_data$V1)
+
+#Create API calls for each pathway map ID for metabolite content:
+human_kegg_metabolite_APIcall <- paste("https://rest.kegg.jp/link/cpd/", list_human_kegg_pathway_data, sep="")
+
+##Create an empty dataframe to store the results of the loop:
+Kegg_metabolite_human = data.frame()
+
+##Get the genes:
+for (i in 1:length(human_kegg_metabolite_APIcall)) {
+  res_metabolite = GET(human_kegg_metabolite_APIcall[i])
+  Kegg_data_metabolite <- rawToChar(res_metabolite$content)
+  if(length(res_metabolite$content)>1){
+  cleaned_Kegg_data_metabolite <- fread(text = Kegg_data_metabolite, header=FALSE, fill = TRUE)
+  Kegg_metabolite_human <- rbind(Kegg_metabolite_human, cleaned_Kegg_data_metabolite)
+  }
+}
+
+##Remove 'cpd:' prefix
+Kegg_metabolite_human$V2<-gsub("cpd:","",as.character(Kegg_metabolite_human$V2))
+
+```
+
+Visualize overlap in Venn diagram for metabolites:
+```{r}
+# Prepare a palette of 4 colors with R colorbrewer:
+library(RColorBrewer)
+myCol <- brewer.pal(4, "Pastel2")
+##Ignore log messages:
+#futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+
+figure1 <- venn.diagram(list(A=showresultsWikiPathways_IMDs$WikidataID, B=showresultsReactome_nonIMDs$WikidataID, C=showresultsWikiPathways_nonIMDs$WikidataID, D=unique(Kegg_metabolite_human$V2)), filename=NULL, fill=myCol,
+                   category.names = c("IMDs" , "Reactome" , "WikiPathways", "KEGG"),
+                   
+                                      
+                   fontfamily = "sans",
+                          main="Overlapping metabolite content between IMD pathways, KEGG, Reactome, and WikiPathways",
+                          main.fontfamily = "sans",
+                   
+                   )
+grid.newpage()
+grid.draw(figure1)
+
+ggsave(figure1, file="metabolite_overlap.png", device = "png")
+
+```
+
+## 3B. Download GeneProduct and Protein IDs from Pathway Models:
+
+```{r}
+##Query WikiPathways GeneProduct+Protein IDs for IMD Pathways, through Entrez IDs:
+queryWikiPathways_IMDs_geneProteins <-
+"SELECT DISTINCT 
+(GROUP_CONCAT(DISTINCT ?PWID1 ;separator=\", \") AS ?results)
+(fn:substring(?HGNC_ID1, 37) as ?HGNCID)
+(count(distinct ?PWID1) AS ?CountID) 
+
+WHERE {  
+  ##Find all DataNodes in an IMD PW
+  ?pathway1 a wp:Pathway .  #Define pathways
+  ?pathway1 dcterms:identifier ?PWID1. #Obtain the ID
+  ?pathway1 wp:ontologyTag cur:IEM . #Only IMD pathways  
+  ?datanode1 dcterms:isPartOf ?pathway1 . #Query all datanodes in PW
+  ?datanode1 wp:bdbEntrezGene  ?HGNC_ID1 .  #Unify to HGNC
+
+}ORDER BY DESC(?CountID)
+"
+##Execute query:
+resultsWikiPathways_IMDs_geneProtein <- SPARQL(endpointwp,queryWikiPathways_IMDs_geneProteins,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_IMDs_geneProtein <- resultsWikiPathways_IMDs_geneProtein$results
+remove(queryWikiPathways_IMDs_geneProteins, resultsWikiPathways_IMDs_geneProtein)
+
+##Query WikiPathways GeneProduct+Protein IDs for not IMD Pathways, through Entrez IDs:
+queryWikiPathways_nonIMDs_geneProtein <-
+"SELECT DISTINCT 
+(GROUP_CONCAT(DISTINCT ?PWID2 ;separator=\", \") AS ?results)
+(fn:substring(?HGNC_ID2, 37) as ?HGNCID)
+(count(distinct ?PWID2) AS ?CountID) 
+
+WHERE {  
+  ##Find equal DataNodes in another PW
+  ?pathway2 a wp:Pathway .  #Define pathways
+  ?pathway2 dcterms:identifier ?PWID2. #Obtain the ID  
+  ?pathway2 wp:organismName \"Homo sapiens\" . #Filter for Human pathways
+  FILTER (EXISTS {?pathway2 wp:ontologyTag cur:AnalysisCollection}) . #Filter for Analysis collection only
+  FILTER (NOT EXISTS {?pathway2 wp:ontologyTag cur:IEM}) . ##Remove PWs from IMD collection
+  ?datanode2 dcterms:isPartOf ?pathway2 . #Query all datanodes in PW
+  ?datanode2 wp:bdbEntrezGene ?HGNC_ID2 .  #Unify to HGNC
+
+  ##Remove common gene names
+  FILTER(!strends(str(?HGNC_ID2), 'TP53')) . 
+
+
+}ORDER BY DESC(?CountID)
+"
+##Execute query:
+resultsWikiPathways_nonIMDs_geneProtein <- SPARQL(endpointwp,queryWikiPathways_nonIMDs_geneProtein,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_nonIMDs_geneProtein <- resultsWikiPathways_nonIMDs_geneProtein$results
+remove(queryWikiPathways_nonIMDs_geneProtein, resultsWikiPathways_nonIMDs_geneProtein)
+
+
+##Query Reactome GeneProduct+Protein IDs for not IMD Pathways, through Entrez IDs:
+queryReactome_nonIMDs_geneProtein <-
+"SELECT DISTINCT 
+(GROUP_CONCAT(DISTINCT ?PWID2 ;separator=\", \") AS ?results)
+(fn:substring(?HGNC_ID2, 37) as ?HGNCID)
+(count(distinct ?PWID2) AS ?CountID) 
+
+WHERE {  
+  ##Find equal DataNodes in another PW
+  ?pathway2 a wp:Pathway .  #Define pathways
+  ?pathway2 dcterms:identifier ?PWID2. #Obtain the ID  
+  ?pathway2 wp:organismName \"Homo sapiens\" . #Filter for Human pathways
+  FILTER (EXISTS {?pathway2 wp:ontologyTag cur:Reactome_Approved}) . #Filter for Reactome collection only
+  FILTER (NOT EXISTS {?pathway2 wp:ontologyTag cur:IEM}) . ##Remove PWs from IMD collection
+  ?datanode2 dcterms:isPartOf ?pathway2 . #Query all datanodes in PW
+  ?datanode2 wp:bdbEntrezGene ?HGNC_ID2 .  #Unify to HGNC
+
+  ##Remove common gene names
+  FILTER(!strends(str(?HGNC_ID2), 'TP53')) . 
+
+}ORDER BY DESC(?CountID)
+"
+##Execute query:
+resultsReactome_nonIMDs_geneProtein <- SPARQL(endpointwp,queryReactome_nonIMDs_geneProtein,curl_args=list(useragent=R.version.string))
+showresultsReactome_nonIMDs_geneProtein <- resultsReactome_nonIMDs_geneProtein$results
+remove(queryReactome_nonIMDs_geneProtein, resultsReactome_nonIMDs_geneProtein)
+
+##Query KEGG Genes through their API for human pathways
+
+#Find all human pathway IDs:
+human_kegg_pathway_APIcall <- "https://rest.kegg.jp/list/pathway/hsa"
+human_kegg_pathway_APIdata <- GET(human_kegg_pathway_APIcall)
+human_kegg_pathway_data <- rawToChar(human_kegg_pathway_APIdata$content)
+if(length(human_kegg_pathway_APIdata$content)>1){
+  cleaned_human_kegg_pathway_data <- fread(text = human_kegg_pathway_data , header=FALSE)
+}
+remove(human_kegg_pathway_data, human_kegg_pathway_APIdata, human_kegg_pathway_APIcall)
+
+#Convert pathway map IDs to an array to add to API call
+list_human_kegg_pathway_data <- c(cleaned_human_kegg_pathway_data$V1)
+
+#Create API calls for each pathway map ID for gene content:
+human_kegg_genes_APIcall <- paste("https://rest.kegg.jp/link/hsa/", list_human_kegg_pathway_data, sep="")
+
+##Create an empty dataframe to store the results of the loop:
+Kegg_genes_human = data.frame()
+
+##Get the genes:
+for (i in 1:length(human_kegg_genes_APIcall)) {
+  res_genes = GET(human_kegg_genes_APIcall[i])
+  Kegg_data_genes <- rawToChar(res_genes$content)
+  if(length(res_genes$content)>1){
+  cleaned_Kegg_data_genes <- fread(text = Kegg_data_genes, header=FALSE, fill = TRUE)
+  Kegg_genes_human <- rbind(Kegg_genes_human, cleaned_Kegg_data_genes)
+  }
+}
+
+##Remove 'hsa:' prefix
+Kegg_genes_human$V2<-gsub("hsa:","",as.character(Kegg_genes_human$V2))
+```
+
+Visualize overlap in Venn diagram:
+```{r}
+# Prepare a palette of 4 colors with R colorbrewer:
+library(RColorBrewer)
+myCol <- brewer.pal(4, "Pastel2")
+##Ignore log messages:
+#futile.logger::flog.threshold(futile.logger::ERROR, name = "VennDiagramLogger")
+
+figure2 <- venn.diagram(list(A=showresultsWikiPathways_IMDs_geneProtein$HGNCID, B=showresultsReactome_nonIMDs_geneProtein$HGNCID, C=showresultsWikiPathways_nonIMDs_geneProtein$HGNCID, D=unique(Kegg_genes_human$V2)), filename=NULL, fill=myCol,
+                   category.names = c("IMDs" , "Reactome" , "WikiPathways", "KEGG"),
+                   
+                   fontfamily = "sans",
+                          main="Overlapping gene content between IMD pathways, KEGG, Reactome, and WikiPathways",
+                          main.fontfamily = "sans",
+                   )
+grid.newpage()
+grid.draw(figure2)
+
+ggsave(figure2, file="gene_overlap.png", device = "png")
+
+```
+
+## 4. Investigate interaction types used
+
+```{r}
+## Retrieve the different interaction types used in IMD pathway model.
+queryWikiPathways_IMD_interactions <-
+"
+SELECT DISTINCT 
+(count(distinct ?interaction) AS ?CountInteractions) 
+(fn:substring(?mimtype,41) as ?MIMTypes)
+(fn:substring(?dataNodeTypeSource,41) AS ?sourceType)
+(fn:substring(?dataNodeTypeTarget,41) AS ?targetType)
+
+WHERE {  
+  ?pathway a wp:Pathway . #Define pathways
+  ?pathway dcterms:identifier ?PWID. #Obtain the ID
+  ?pathway wp:ontologyTag cur:IEM . #Only IMD pathways
+  
+  ?interaction dcterms:isPartOf ?pathway . #Query all interactions in PW	 			
+  ?interaction a wp:DirectedInteraction .  #Only used Directed interactions
+  ?interaction wp:source ?source . #Define source of interaction
+  ?interaction wp:target ?target . #Define target of interaction  
+  OPTIONAL{?interaction a ?mimtype} . #Define MIM-type interactions
+  VALUES ?mimtype {wp:ComplexBinding wp:Conversion wp:Inhibition wp:Catalysis wp:Stimulation wp:TranscriptionTranslation} .
+  
+  ?source a ?dataNodeTypeSource . #Check type of DataNode Sources
+  VALUES ?dataNodeTypeSource {wp:Metabolite wp:Rna wp:Protein wp:GeneProduct wp:Complex} .
+  ?target a ?dataNodeTypeTarget . #Check type of DataNode Target
+  VALUES ?dataNodeTypeTarget {wp:Metabolite wp:Rna wp:Protein wp:GeneProduct wp:Complex} .
+
+}ORDER BY DESC(?CountInteractions)
+"
+
+##Execute query:
+resultsWikiPathways_IMD_interactions <- SPARQL(endpointwp,queryWikiPathways_IMD_interactions,curl_args=list(useragent=R.version.string))
+showresultsWikiPathways_IMD_interactions <- resultsWikiPathways_IMD_interactions$results
+remove(queryWikiPathways_IMD_interactions, resultsWikiPathways_IMD_interactions)
+
+##Print out results to Notebook:
+showresultsWikiPathways_IMD_interactions
+
+```
+
+## 5. Investigate IMD info in Wikidata
+
+```{r}
+endpoint <- "https://query.wikidata.org/sparql"
+query <- '#Genes for Purine (WP4224), Pyridimide (WP4225) and Urea (WP4595)\nSELECT DISTINCT ?geneLabel ?proteinLabel ?disorderLabel\nWHERE\n{\nVALUES ?listPUPYAA {\'ADA\' \'ADSL\' \'AGXT2\' \'AMPD1\' \'APRT\'\n  \'ARG1\' \'ASL\' \'ASS1\' \'ATIC\' \'CPS1\' \'DGUOK\' \'DHODH\'\n  \'DPYD\' \'DPYS\' \'HPRT1\' \'IMPDH1\' \'ITPA\' \'NAGS\' \'NT5C3A\'\n  \'OTC\' \'PNP\' \'PRPS1\' \'RRM2B\' \'SLC25A13\'\n  \'SLC25A15\' \'TK2\' \'TPMT\' \'TYMP\' \'UBP1\' \'UMPS\'\n  \'XDH\' \'MOCOS\'}\n?gene wdt:P31 wd:Q7187. # Must be instance of gene\n?gene wdt:P703 wd:Q15978631 . # Found in taxon Hs\n?gene wdt:P353 ?listPUPYAA .\n\n?gene wdt:P688 ?protein .\n?protein wdt:P705 ?check . #to avoid obtaining protein \n#entries which are not part of UniProt\'s reviewed list.\n\nOPTIONAL{?gene wdt:P2293 ?disorder .\n?gene wdt:P2293 ?disorder .\n?disorder wdt:P279 ?type .\n?type wdt:P279 wd:Q1758393 .} #Only obtain IMDs.\n\nSERVICE wikibase:label \n{ bd:serviceParam wikibase:language "en". } \n}\nORDER BY ASC(?geneLabel)'
+useragent <- paste("WDQS-Example", R.version.string)
+
+qd <- SPARQL(endpoint,query,curl_args=list(useragent=useragent))
+df <- qd$results
+
+##Print out results to Notebook:
+df
+
+```
