@@ -85,7 +85,7 @@ WHERE {
 
       {
     ?geneProduct dcterms:isPartOf ?pathway . #Only those part of PW             
-    ?geneProduct a wp:GeneProduct . #Filter for Protein DataNodes    
+    ?geneProduct a wp:GeneProduct . #Filter for GeneProduct DataNodes    
     } 
     UNION
     {
