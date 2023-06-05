@@ -556,6 +556,8 @@ showresultsWikiPathways_IMD_interactions
 ## 5. Investigate IMD info in Wikidata
 
 ```{r}
+##TODO: query HGNC symbols from WP!
+
 endpoint <- "https://query.wikidata.org/sparql"
 query <- '#Genes for Purine (WP4224), Pyridimide (WP4225) and Urea (WP4595)\nSELECT DISTINCT ?geneLabel ?proteinLabel ?disorderLabel\nWHERE\n{\nVALUES ?listPUPYAA {\'ADA\' \'ADSL\' \'AGXT2\' \'AMPD1\' \'APRT\'\n  \'ARG1\' \'ASL\' \'ASS1\' \'ATIC\' \'CPS1\' \'DGUOK\' \'DHODH\'\n  \'DPYD\' \'DPYS\' \'HPRT1\' \'IMPDH1\' \'ITPA\' \'NAGS\' \'NT5C3A\'\n  \'OTC\' \'PNP\' \'PRPS1\' \'RRM2B\' \'SLC25A13\'\n  \'SLC25A15\' \'TK2\' \'TPMT\' \'TYMP\' \'UBP1\' \'UMPS\'\n  \'XDH\' \'MOCOS\'}\n?gene wdt:P31 wd:Q7187. # Must be instance of gene\n?gene wdt:P703 wd:Q15978631 . # Found in taxon Hs\n?gene wdt:P353 ?listPUPYAA .\n\n?gene wdt:P688 ?protein .\n?protein wdt:P705 ?check . #to avoid obtaining protein \n#entries which are not part of UniProt\'s reviewed list.\n\nOPTIONAL{?gene wdt:P2293 ?disorder .\n?gene wdt:P2293 ?disorder .\n?disorder wdt:P279 ?type .\n?type wdt:P279 wd:Q1758393 .} #Only obtain IMDs.\n\nSERVICE wikibase:label \n{ bd:serviceParam wikibase:language "en". } \n}\nORDER BY ASC(?geneLabel)'
 useragent <- paste("WDQS-Example", R.version.string)
